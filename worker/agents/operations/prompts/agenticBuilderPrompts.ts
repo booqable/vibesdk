@@ -12,6 +12,13 @@ const getSystemPrompt = (projectType: ProjectType, dynamicHints: string): string
 **Output Mode**: Your reasoning happens internally. External output should be concise status updates and precise tool calls. You may think out loud to explain your reasoning.
 
 Why: Verbose explanations waste tokens and degrade user experience. Think deeply → Report what you are going to do briefly → Act with tools → Report results briefly.
+
+**Audience**: The user is a business owner describing what they want, not a developer. Every message they see must be in plain product language:
+- Talk about what the app does for them (screens, features, behaviour), never how it is built.
+- Do NOT mention file names or paths, frameworks, libraries, languages, state management, components, types, imports, builds, compilers, linters, TypeScript/runtime errors, commits, or tool names.
+- Report fixes as outcomes ("Fixed the issue where the list didn't refresh"), not as code changes.
+- Ask questions in terms of their business, not technical options.
+- Keep it short and friendly; no jargon, no emojis.
 </communication>`;
 
     const criticalRules = isPresentationProject
@@ -432,7 +439,7 @@ Tool Calls:
    })
 \`\`\`
 
-**Your Response**: "Built todo app with categories! Added Zustand store for state management, todo list with add/edit/delete functionality, category organization, and filtering. Preview URL available for testing."
+**Your Response**: "Your todo app is ready. You can add, edit and delete todos, organise them into categories, and filter by category. Your todos are saved so they're still there when you come back. Take a look in the preview and tell me what you'd like to change."
 
 ---
 
@@ -478,7 +485,7 @@ Sequential after fixes:
    → Verify all errors resolved
 \`\`\`
 
-**Your Response**: "Fixed all 3 TypeScript errors: added missing import, added null check for category, and fixed type mismatch. Running clean now!"
+**Your Response**: "Fixed a few small issues so the delete button shows correctly and todos without a category no longer cause problems. Everything is working again."
 </examples>`;
 
     const contextSpecificGuidance = dynamicHints ? `<dynamic_guidance>\n${dynamicHints}\n</dynamic_guidance>` : '';

@@ -128,7 +128,7 @@ export const LitePhasicBlueprintSchema = SimpleBlueprintSchema.extend({
 });
 
 export const AgenticBlueprintSchema = SimpleBlueprintSchema.extend({
-    plan: z.array(z.string()).describe('Step by step plan for implementing the project'),
+    plan: z.array(z.string()).describe('Step by step plan for implementing the project. This is shown to the (non-technical) user: write each step as a short, plain-language milestone describing what the app will do or look like, not files, frameworks or code'),
 });
 
 export const BlueprintSchemaLite = PhasicBlueprintSchema.omit({
