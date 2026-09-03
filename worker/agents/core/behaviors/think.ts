@@ -302,6 +302,36 @@ export class ThinkCodingBehavior
 	 * and the VibeSDK-specific deploy→verify workflow, which the generic prompt
 	 * files don't know about — the environment and custom instructions for the run.
 	 */
+	/**
+	 * When a template was seeded, tell the model the workspace is NOT empty and
+	 * it must build on the scaffold (framework, components, wiring). Without this
+	 * Think ignores the seeded files and hand-rolls a static site.
+	 */
+	private buildScaffoldContext(): string[] {
+		const tmpl = this.templateDetailsCache;
+		if (!tmpl || tmpl.name === 'think' || Object.keys(tmpl.allFiles ?? {}).length === 0) {
+			return [];
+		}
+		const dontTouch = (tmpl.dontTouchFiles ?? []).join(', ') || '(none)';
+		const importantFiles = (tmpl.importantFiles ?? []).map((f) => `- ${f}`).join('\n');
+		const usage = tmpl.description?.usage?.trim();
+
+		return [
+			'## Existing project scaffold — build ON this (IMPORTANT)',
+			'This workspace is NOT empty. It has been seeded with a complete, working starter',
+			'(framework, component library, config, and integration wiring) already committed.',
+			'You MUST build the requested feature on top of it:',
+			'- Explore FIRST: use `list` and `read` to inspect the existing files before writing anything. Do not assume the stack.',
+			'- Reuse the existing framework, components, styling tokens and libraries. Do NOT introduce a different stack.',
+			'- Do NOT create a plain static HTML/CSS/JS site, and do NOT recreate config that already exists (package.json, the build/deploy config, the entry HTML).',
+			`- NEVER modify these protected files (writes/deletes are rejected): ${dontTouch}.`,
+			'',
+			importantFiles ? '### Key files\n' + importantFiles : '',
+			usage ? '### How this starter works\n' + usage : '',
+			'',
+		].filter((s) => s !== '');
+	}
+
 	private buildSystemPrompt(modelName: string, provider: string): string {
 		return [
 			`You are powered by the model named ${modelName}. The exact model ID is ${provider}/${modelName}.`,
@@ -312,6 +342,7 @@ export class ThinkCodingBehavior
 			'',
 			`# Project: ${this.state.projectName || 'app'}`,
 			'',
+			...this.buildScaffoldContext(),
 			'## User request',
 			this.state.query,
 			'',
