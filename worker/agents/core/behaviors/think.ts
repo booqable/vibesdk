@@ -282,6 +282,9 @@ export class ThinkCodingBehavior
 			},
 			systemPrompt: this.buildSystemPrompt(modelName, aiModelConfig.provider),
 			previewUrl: await this.getBrowserPreviewURL(0).catch(() => undefined),
+			// Protect the seeded template's wiring (e.g. the Booqable auth worker)
+			// from the agent's file tools.
+			dontTouchFiles: this.templateDetailsCache?.dontTouchFiles ?? [],
 		};
 
 		try {

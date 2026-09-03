@@ -8,6 +8,7 @@ import type {
 	ReadOperations,
 	WriteOperations,
 } from '@cloudflare/think/tools/workspace';
+import { isFileModifiable } from '../../services/sandbox/utils';
 
 export interface SpaceWorkspaceStub extends DurableObjectStub {
 	readFile(path: string): Promise<string>;
@@ -94,7 +95,26 @@ function compareByPath(a: FileInfo, b: FileInfo): number {
 	return a.path.localeCompare(b.path);
 }
 
-export function createSpaceWorkspaceOps(getStub: () => SpaceWorkspaceStub): SpaceWorkspaceOps {
+export function createSpaceWorkspaceOps(
+	getStub: () => SpaceWorkspaceStub,
+	/**
+	 * Paths/prefixes the agent must not modify (the template's `dontTouchFiles`,
+	 * e.g. the seeded auth worker). Enforced on every mutation below so a build
+	 * turn can't overwrite the scaffolding. The seed itself writes via the raw
+	 * SpaceDO stub, not these ops, so it is unaffected.
+	 */
+	protectedPaths: string[] = [],
+): SpaceWorkspaceOps {
+	const guardMutation = (path: string, action: 'write' | 'delete'): void => {
+		const { allowed, reason } = isFileModifiable(path, protectedPaths);
+		if (!allowed) {
+			throw new Error(
+				`Refusing to ${action} \`${path}\`: ${reason}. It is a protected template ` +
+					`file — build around it instead of editing it.`,
+			);
+		}
+	};
+
 	const ops: SpaceWorkspaceOps = {
 		async readFile(path: string): Promise<string | null> {
 			try {
@@ -123,6 +143,7 @@ export function createSpaceWorkspaceOps(getStub: () => SpaceWorkspaceStub): Spac
 		},
 
 		async writeFile(path: string, content: string): Promise<void> {
+			guardMutation(path, 'write');
 			// TEMP: flag double-escaped content arriving at the write boundary.
 			logSuspiciousEscaping(path, content);
 			await withDurableObjectResetRetry(getStub, (stub) => stub.writeFile(path, content));
@@ -157,6 +178,7 @@ export function createSpaceWorkspaceOps(getStub: () => SpaceWorkspaceStub): Spac
 			path: string,
 			opts?: { recursive?: boolean; force?: boolean },
 		): Promise<void> {
+			guardMutation(path, 'delete');
 			await withDurableObjectResetRetry(getStub, (stub) => stub.rm(path, opts));
 		},
 	};

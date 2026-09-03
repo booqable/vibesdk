@@ -64,6 +64,11 @@ export interface ThinkAgentConfig {
 	 * as the default target for the `get_browser_console_logs` tool.
 	 */
 	previewUrl?: string;
+	/**
+	 * Paths/prefixes the agent's file tools must not modify (the seeded
+	 * template's `dontTouchFiles`). Enforced in `createSpaceWorkspaceOps`.
+	 */
+	dontTouchFiles?: string[];
 }
 
 const DEFAULT_SYSTEM_PROMPT =
@@ -320,7 +325,10 @@ export class ThinkAgent extends Think<Env> {
 	}
 
 	override getTools(): ToolSet {
-		const ops = createSpaceWorkspaceOps(() => this.getSpaceStub());
+		const ops = createSpaceWorkspaceOps(
+			() => this.getSpaceStub(),
+			this.getConfig<ThinkAgentConfig>()?.dontTouchFiles ?? [],
+		);
 		const previewUrl = this.getConfig<ThinkAgentConfig>()?.previewUrl;
 		// Same names as Think's built-in workspace tools, so these SpaceDO-backed
 		// versions win the tool-merge. Bash is disabled via `workspaceBash`.
