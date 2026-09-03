@@ -199,12 +199,15 @@ export class CodingAgentController extends BaseController {
             });
             this.logger.info(`Creating project of type: ${projectType}`);
 
-            // Think bypasses VibeSDK's template catalog entirely — its
-            // companion SpaceDO seeds files via agent-driven writes, and
-            // `ThinkCodingBehavior` ignores `templateInfo` regardless.
-            // Skip the scratch placeholder + selection synthesis on this path.
+            // Think is template-free by default — no scratch placeholder or AI
+            // selection synthesis. But when a template is EXPLICITLY selected
+            // (e.g. the Booqable app starter), fetch it so the companion SpaceDO
+            // can be seeded with its files (ThinkCodingBehavior.seedSpace) and
+            // Think builds on top of that scaffolding.
             const isThink = behaviorType === 'think';
-            const templateResult = isThink
+            const seedThinkFromTemplate =
+                isThink && !!body.selectedTemplate && body.selectedTemplate !== 'auto';
+            const templateResult = isThink && !seedThinkFromTemplate
                 ? undefined
                 : await getTemplateForQuery(env, inferenceContext, query, projectType, body.images, this.logger, body.selectedTemplate);
             const finalProjectType: Exclude<ProjectType, never> = isThink
@@ -228,12 +231,12 @@ export class CodingAgentController extends BaseController {
                 httpStatusUrl,
                 behaviorType,
                 projectType: finalProjectType,
-                template: isThink
-                    ? { name: 'think', files: [] }
-                    : {
-                        name: templateResult!.templateDetails.name,
-                        files: getTemplateImportantFiles(templateResult!.templateDetails),
-                    },
+                template: templateResult
+                    ? {
+                        name: templateResult.templateDetails.name,
+                        files: getTemplateImportantFiles(templateResult.templateDetails),
+                    }
+                    : { name: 'think', files: [] },
             });
             const agentInstance = await getAgentStub(env, agentId, { behaviorType, projectType: finalProjectType });
 
@@ -249,9 +252,9 @@ export class CodingAgentController extends BaseController {
                 },
             } as const;
 
-            const initArgs = isThink
-                ? baseInitArgs
-                : { ...baseInitArgs, templateInfo: { templateDetails: templateResult!.templateDetails, selection: templateResult!.selection } };
+            const initArgs = templateResult
+                ? { ...baseInitArgs, templateInfo: { templateDetails: templateResult.templateDetails, selection: templateResult.selection } }
+                : baseInitArgs;
 
             const agentPromise = agentInstance.initialize(initArgs) as Promise<AgentState>;
             void (async () => {
