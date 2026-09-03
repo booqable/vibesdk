@@ -157,8 +157,11 @@ export class ThinkCodingBehavior
 		..._args: unknown[]
 	): Promise<ThinkState> {
 		await super.initialize(initArgs);
-		// Think projects are template-free: SpaceDO + the agent's own file tools
-		// own scaffolding entirely. We intentionally ignore `templateInfo`.
+		// Think is normally template-free (SpaceDO + the agent's own file tools).
+		// When a template IS selected (e.g. the Booqable app starter),
+		// `super.initialize` has cached its files in `templateDetailsCache`, and
+		// `seedSpace` below writes them into the SpaceDO so Think builds ON TOP of
+		// wired scaffolding instead of an empty workspace.
 		const { query, hostname, inferenceContext, sandboxSessionId } = initArgs;
 
 		const baseName = (query || 'project').toString();
@@ -200,7 +203,7 @@ export class ThinkCodingBehavior
 		const configureDurationMs = performance.now() - configureStartedAt;
 
 		const seedStartedAt = performance.now();
-		await this.seedEmptySpace();
+		await this.seedSpace();
 		const seedDurationMs = performance.now() - seedStartedAt;
 
 		this.logger.info(
@@ -332,20 +335,38 @@ export class ThinkCodingBehavior
 	}
 
 	/**
-	 * Bootstrap an empty SpaceDO: write a marker file and commit so the DO is
-	 * instantiated with a `main` branch and a valid HEAD.
+	 * Bootstrap the SpaceDO so it has a `main` branch and a valid HEAD. When a
+	 * template was selected at create time, `templateDetailsCache.allFiles` holds
+	 * its files (cached by `super.initialize`) — write them into the space and
+	 * commit so Think starts from that scaffolding. Otherwise write a marker
+	 * (the classic template-free empty space).
 	 */
-	private async seedEmptySpace(): Promise<void> {
-		const marker = JSON.stringify(
-			{ agentId: this.getAgentId(), createdAt: new Date().toISOString(), seededBy: 'vibesdk-think' },
-			null,
-			2,
-		);
+	private async seedSpace(): Promise<void> {
+		const templateFiles = this.templateDetailsCache?.allFiles;
+		const templateName = this.templateDetailsCache?.name;
+		const paths = templateFiles ? Object.keys(templateFiles) : [];
+
 		try {
-			await this.callSpace((space) => space.writeFile('.think/space.json', marker));
-			await this.callSpace((space) => space.gitCommitLocal('chore: initialize think space'));
+			if (paths.length > 0) {
+				// One writeFile RPC per file; the SpaceDO has no batch write.
+				for (const path of paths) {
+					await this.callSpace((space) => space.writeFile(path, templateFiles![path]));
+				}
+				await this.callSpace((space) =>
+					space.gitCommitLocal(`chore: seed think space from template ${templateName ?? 'template'}`),
+				);
+				this.logger.info(`Seeded think space from template "${templateName}" (${paths.length} files)`);
+			} else {
+				const marker = JSON.stringify(
+					{ agentId: this.getAgentId(), createdAt: new Date().toISOString(), seededBy: 'vibesdk-think' },
+					null,
+					2,
+				);
+				await this.callSpace((space) => space.writeFile('.think/space.json', marker));
+				await this.callSpace((space) => space.gitCommitLocal('chore: initialize think space'));
+			}
 		} catch (e) {
-			this.logger.warn('SpaceDO empty-seed failed (continuing)', e);
+			this.logger.warn('SpaceDO seed failed (continuing)', e);
 		}
 	}
 
