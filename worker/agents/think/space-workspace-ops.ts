@@ -25,6 +25,10 @@ export interface SpaceWorkspaceStub extends DurableObjectStub {
 		author?: { name: string; email: string },
 	): Promise<{ sha: string; message: string }>;
 	gitStatus(): Promise<unknown>;
+	/** Full working tree of a branch, ready for the sandbox container. */
+	getBranchFiles(
+		branch: string,
+	): Promise<Array<{ filePath: string; fileContents: string }>>;
 	deploy(branch: string): Promise<unknown>;
 	rollbackToCommit(branch: string, commitHash: string): Promise<unknown>;
 }

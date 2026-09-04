@@ -5,6 +5,7 @@ import type { Env } from "../env"
 import {
   buildBranchDeployment,
   handleDeployCommand,
+  readBranchFiles,
   type BranchDeploymentBundle,
   type DeployContext,
 } from "./deploy-engine"
@@ -522,6 +523,33 @@ export class SpaceDO extends DurableObject<Env> {
   }
 
   // ── Deploy RPC methods ──────────────────────────────────────────
+
+  /**
+   * Return the full working tree of a branch as `TemplateFile[]`
+   * (`{ filePath, fileContents }`), ready to hand to the sandbox container's
+   * `createInstance`/`writeFiles`. This is the read side of the build-offload:
+   * the durable git snapshot lives here in the SpaceDO, but the memory-heavy
+   * bundle/deploy runs in a Cloudflare Container (the SpaceDO isolate's 128 MB
+   * wall OOMs on our dep-rich template). Mirrors `deploy()`'s context setup so
+   * the Artifacts base is materialized before the tree is read.
+   */
+  async getBranchFiles(
+    branch: string,
+  ): Promise<Array<{ filePath: string; fileContents: string }>> {
+    await this.ensureInit()
+    await this.materializeAll()
+    await this.flushCheckpoint()
+    const ctx: DeployContext = {
+      sql: this.ctx.storage.sql,
+      git: this.git,
+      fs: this.fs,
+    }
+    const { files } = await readBranchFiles(ctx, branch)
+    return Object.entries(files).map(([filePath, fileContents]) => ({
+      filePath,
+      fileContents,
+    }))
+  }
 
   async deploy(branch: string): Promise<unknown> {
     await this.ensureInit()

@@ -285,6 +285,12 @@ export class ThinkCodingBehavior
 			// Protect the seeded template's wiring (e.g. the Booqable auth worker)
 			// from the agent's file tools.
 			dontTouchFiles: this.templateDetailsCache?.dontTouchFiles ?? [],
+			// Container deploy target + secrets. `deploy_space` builds + deploys
+			// in a sandbox container (the SpaceDO isolate OOMs on our template),
+			// so it needs the worker name; `envVars` is the secrets-from-the-start
+			// hook (empty until the host threads Booqable app secrets through).
+			projectName: this.state.projectName,
+			envVars: {},
 		};
 
 		try {
