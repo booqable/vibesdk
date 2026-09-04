@@ -281,7 +281,13 @@ export class ThinkCodingBehavior
 				useStoredKeys: usesStoredKeys,
 			},
 			systemPrompt: this.buildSystemPrompt(modelName, aiModelConfig.provider),
-			previewUrl: await this.getBrowserPreviewURL(0).catch(() => undefined),
+			// Point the preview + get_browser_console_logs at the STABLE dispatch
+			// URL (<projectName>.booqableapps.com) the container deploy publishes
+			// to — NOT the SpaceDO in-isolate preview proxy, which our template is
+			// too heavy to bundle (128 MB DO wall). Deterministic from projectName.
+			previewUrl: this.state.projectName
+				? `https://${this.state.projectName}.${getPreviewDomain(this.env)}`
+				: undefined,
 			// Protect the seeded template's wiring (e.g. the Booqable auth worker)
 			// from the agent's file tools.
 			dontTouchFiles: this.templateDetailsCache?.dontTouchFiles ?? [],
@@ -804,11 +810,17 @@ export class ThinkCodingBehavior
 	}
 
 	/**
-	 * The model deployed the SpaceDO itself via the `deploy_space` tool. Reflect
-	 * that into VibeSDK: parse the tool's JSON result, and on success surface the
-	 * preview to the FE (the same `DEPLOYMENT_COMPLETED { previewURL }` event
-	 * `deployCurrentBranch` emits). On a reported build error, emit
-	 * `DEPLOYMENT_FAILED`.
+	 * `deploy_space` built + deployed the branch in a container sandbox to the
+	 * dispatch namespace (the SpaceDO isolate is too small to bundle our
+	 * template). Reflect that into VibeSDK: parse the tool's JSON result, then
+	 *  - register the deployment on the app record (`updateDeploymentId`) and
+	 *    make the app public — the dispatch router (worker/index.ts) consults the
+	 *    DB record + visibility on EVERY request and 404s ("not currently
+	 *    available") until both are set, which is why a raw container deploy was
+	 *    invisible;
+	 *  - surface the STABLE `<projectName>.booqableapps.com` preview URL the tool
+	 *    returns (NOT `getBrowserPreviewURL()`, the dead SpaceDO proxy).
+	 * On a reported build error, emit `DEPLOYMENT_FAILED`.
 	 */
 	private async handleDeploySpaceOutput(output: unknown): Promise<void> {
 		let parsed: Record<string, unknown> | undefined;
@@ -823,15 +835,32 @@ export class ThinkCodingBehavior
 			return;
 		}
 
-		const commitHash = parsed && typeof parsed.commit_hash === 'string' ? parsed.commit_hash : undefined;
-		if (commitHash) {
-			this.setState({ ...this.state, lastDeployedCommit: commitHash });
+		const previewURL = parsed && typeof parsed.preview_url === 'string' ? parsed.preview_url : undefined;
+		const deploymentId = parsed && typeof parsed.deployment_id === 'string' ? parsed.deployment_id : undefined;
+
+		if (deploymentId) {
+			try {
+				const apps = new AppService(this.env);
+				await apps.updateDeploymentId(this.getAgentId(), deploymentId);
+				// Building previews must be publicly servable so the FE iframe and
+				// the headless `get_browser_console_logs` browser can load them.
+				await apps.updateAppVisibility(this.getAgentId(), this.state.metadata.userId, 'public');
+			} catch (e) {
+				this.logger.warn('Failed to register think dispatch deployment', e);
+			}
+			this.setState({ ...this.state, cloudflareDeploymentUrl: previewURL });
 		}
-		try {
-			const url = await this.getBrowserPreviewURL();
-			this.broadcast(WebSocketMessageResponses.DEPLOYMENT_COMPLETED, { previewURL: url });
-		} catch (e) {
-			this.logger.warn('Failed to surface preview after deploy_space', e);
+
+		if (previewURL) {
+			this.broadcast(WebSocketMessageResponses.CLOUDFLARE_DEPLOYMENT_COMPLETED, {
+				message: 'Successfully deployed to Cloudflare Workers',
+				instanceId: this.getAgentId(),
+				deploymentUrl: previewURL,
+				workersUrl: previewURL,
+			});
+			this.broadcast(WebSocketMessageResponses.DEPLOYMENT_COMPLETED, { previewURL });
+		} else {
+			this.logger.warn('deploy_space returned no preview_url', { parsed });
 		}
 	}
 

@@ -102,15 +102,21 @@ export function createDeploySpaceTool(deps: DeploySpaceToolDeps): Tool {
 			}
 			setInstanceId(instanceId);
 
-			// 4. Wait (bounded) for the dev server, then deploy from the container.
+			// 4. Wait (bounded) for the dev server, then build + deploy to the
+			//    dispatch namespace from the container (stable
+			//    <projectName>.booqableapps.com). Return `deployment_id` so the
+			//    host can register the deployment + make the app viewable — the
+			//    dispatch router 404s until the app's DB record/visibility is set.
 			const status = await waitForHealthy(sandbox, instanceId);
 			let deployedUrl: string | undefined = status?.previewURL;
+			let deploymentId: string | undefined;
 			let deployed = false;
 			let deployError: string | undefined;
 			try {
 				const result = await sandbox.deployToCloudflareWorkers(instanceId, 'platform');
 				deployed = Boolean(result?.success);
 				deployedUrl = result?.deployedUrl ?? deployedUrl;
+				deploymentId = result?.deploymentId ?? deploymentId;
 				if (!deployed) deployError = result?.error ?? 'Deploy reported failure';
 			} catch (e) {
 				deployError = e instanceof Error ? e.message : String(e);
@@ -125,6 +131,7 @@ export function createDeploySpaceTool(deps: DeploySpaceToolDeps): Tool {
 					instance_id: instanceId,
 					deployed,
 					preview_url: deployedUrl,
+					...(deploymentId ? { deployment_id: deploymentId } : {}),
 					...(deployError ? { error: `Deploy failed: ${deployError}` } : {}),
 					...(buildErrors.length > 0 ? { build_errors: buildErrors } : {}),
 				},
