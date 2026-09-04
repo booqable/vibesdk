@@ -420,12 +420,17 @@ export class ThinkCodingBehavior
 	// Generation orchestration
 
 	/**
-	 * The `preview` WS action / preview controller route here. Think has no
-	 * sandbox — previews run on Workers via SpaceDO — so deploy the current
-	 * SpaceDO branch and return its preview URL.
+	 * Host-driven preview hook. The base `generateAllFiles` lifecycle calls this
+	 * around `build()`, and the `preview` WS action routes here too. Think's
+	 * deploys are entirely MODEL-driven via the `deploy_space` tool (container
+	 * build → dispatch namespace), so this must NOT bundle: the old in-isolate
+	 * `deployCurrentBranch()` (SpaceDO `createApp`) OOMs on our dep-rich template
+	 * ("Durable Object's isolate exceeded its memory limit"). Just surface the
+	 * URL the model's last `deploy_space` published; return null until then so
+	 * the FE shows "preview will appear once the first version is generated".
 	 */
 	async deployToSandbox(): Promise<PreviewType | null> {
-		const url = await this.deployCurrentBranch();
+		const url = this.state.cloudflareDeploymentUrl;
 		return url ? { previewURL: url } : null;
 	}
 
@@ -948,48 +953,6 @@ export class ThinkCodingBehavior
 			updatedKeys: ['title'],
 			blueprint: updatedBlueprint,
 		});
-	}
-
-	private async deployCurrentBranch(): Promise<string | null> {
-		try {
-			const branch = this.state.currentBranch || 'main';
-			this.broadcast(WebSocketMessageResponses.DEPLOYMENT_STARTED, {});
-
-			// SpaceDO.deploy reads files from the committed git branch, so commit
-			// the working-tree changes the ThinkAgent's tools just made first.
-			try {
-				await this.callSpace((space) => space.gitCommit('chore: think turn changes'));
-			} catch (e) {
-				this.logger.debug('gitCommit before deploy (no-op or failed)', e);
-			}
-
-			const result = await this.callSpace((space) => space.deploy(branch));
-
-			// SpaceDO.deploy reports build/config failures in the payload rather
-			// than throwing (and still fills in preview_url). Surface those as a
-			// real deployment failure so the FE/agent sees the build error (e.g.
-			// a syntax error in the generated code) instead of a broken preview.
-			if (result?.error) {
-				const message = result.details ? `${result.error}: ${result.details}` : result.error;
-				this.logger.warn('SpaceDO.deploy reported a build failure', { branch, error: message });
-				this.broadcast(WebSocketMessageResponses.DEPLOYMENT_FAILED, { error: message });
-				return null;
-			}
-
-			if (result?.commit_hash) {
-				this.setState({ ...this.state, lastDeployedCommit: result.commit_hash });
-			}
-
-			const url = await this.getBrowserPreviewURL();
-			this.broadcast(WebSocketMessageResponses.DEPLOYMENT_COMPLETED, { previewURL: url });
-			return url;
-		} catch (e) {
-			this.logger.warn('SpaceDO.deploy failed', e);
-			this.broadcast(WebSocketMessageResponses.DEPLOYMENT_FAILED, {
-				error: e instanceof Error ? e.message : String(e),
-			});
-			return null;
-		}
 	}
 
 	async deployToCloudflare(
