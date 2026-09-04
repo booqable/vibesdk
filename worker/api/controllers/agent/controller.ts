@@ -247,6 +247,9 @@ export class CodingAgentController extends BaseController {
                 hostname,
                 inferenceContext,
                 images: uploadedImages,
+                // Signed session token from the host (Booqable), so Think can
+                // load the preview authenticated for real-data debugging.
+                previewToken: typeof body.previewToken === 'string' ? body.previewToken : undefined,
                 onBlueprintChunk: (chunk: string) => {
                     writer.write({chunk});
                 },
