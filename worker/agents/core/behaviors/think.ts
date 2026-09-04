@@ -215,19 +215,6 @@ export class ThinkCodingBehavior
 	}
 
 	/**
-	 * The URL the `get_browser_console_logs` tool loads: the stable dispatch
-	 * deploy, plus the host session token (when supplied) so the app boots a
-	 * real session and the agent debugs against live API data instead of a
-	 * logged-out shell.
-	 */
-	private previewUrlForTools(): string | undefined {
-		if (!this.state.projectName) return undefined;
-		const base = `https://${this.state.projectName}.${getPreviewDomain(this.env)}`;
-		const token = this.state.previewToken;
-		return token ? `${base}/?token=${encodeURIComponent(token)}` : base;
-	}
-
-	/**
 	 * Resolve the AI Gateway model coordinates from VibeSDK's model config and
 	 * push them (plus space name + system prompt) into the ThinkAgent DO.
 	 */
@@ -298,9 +285,14 @@ export class ThinkCodingBehavior
 			// Point the preview + get_browser_console_logs at the STABLE dispatch
 			// URL (<projectName>.booqableapps.com) the container deploy publishes
 			// to — NOT the SpaceDO in-isolate preview proxy, which our template is
-			// too heavy to bundle (128 MB DO wall). Carries the host session token
-			// so the agent debugs the app authenticated (real API data).
-			previewUrl: this.previewUrlForTools(),
+			// too heavy to bundle (128 MB DO wall). Deterministic from projectName.
+			previewUrl: this.state.projectName
+				? `https://${this.state.projectName}.${getPreviewDomain(this.env)}`
+				: undefined,
+			// Host session token. get_browser_console_logs appends it to whatever
+			// URL it loads (default or an agent-chosen route) so the app boots a
+			// real session and the agent debugs against live API data.
+			previewToken: this.state.previewToken,
 			// Protect the seeded template's wiring (e.g. the Booqable auth worker)
 			// from the agent's file tools.
 			dontTouchFiles: this.templateDetailsCache?.dontTouchFiles ?? [],

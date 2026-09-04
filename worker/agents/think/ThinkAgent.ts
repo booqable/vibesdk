@@ -66,6 +66,11 @@ export interface ThinkAgentConfig {
 	 */
 	previewUrl?: string;
 	/**
+	 * Host session token appended to the `get_browser_console_logs` target URL
+	 * so the tool loads the app authenticated (real API data).
+	 */
+	previewToken?: string;
+	/**
 	 * Paths/prefixes the agent's file tools must not modify (the seeded
 	 * template's `dontTouchFiles`). Enforced in `createSpaceWorkspaceOps`.
 	 */
@@ -349,6 +354,7 @@ export class ThinkAgent extends Think<Env> {
 			this.getConfig<ThinkAgentConfig>()?.dontTouchFiles ?? [],
 		);
 		const previewUrl = this.getConfig<ThinkAgentConfig>()?.previewUrl;
+		const previewToken = this.getConfig<ThinkAgentConfig>()?.previewToken;
 		// Same names as Think's built-in workspace tools, so these SpaceDO-backed
 		// versions win the tool-merge. Bash is disabled via `workspaceBash`.
 		return {
@@ -380,10 +386,12 @@ export class ThinkAgent extends Think<Env> {
 			set_title: createSetTitleTool(),
 			// Ask the user clarifying questions via a frontend popup.
 			ask_questions: createAskQuestionsTool(),
-			// Client-side debugging via a real headless browser.
+			// Client-side debugging via a real headless browser. The token is
+			// appended to whatever URL it loads so the app boots a real session.
 			get_browser_console_logs: createBrowserConsoleLogsTool({
 				env: this.env,
 				defaultUrl: previewUrl,
+				token: previewToken,
 			}),
 		} as unknown as ToolSet;
 	}
