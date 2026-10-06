@@ -25,6 +25,7 @@ import { isDev } from 'worker/utils/envs';
 import { signSpacePreviewToken } from 'worker/utils/spacePreviewToken';
 import { AppService } from 'worker/database/services/AppService';
 import { getConfigurationForModel } from '../../inferutils/core';
+import { buildAudienceSection } from '../../think/audience-prompt';
 import { buildClarifyBeforeBuildingSection } from '../../think/clarify-prompt';
 import type { ThinkAgentConfig } from '../../think/ThinkAgent';
 import { withDurableObjectResetRetry } from '../../think/space-workspace-ops';
@@ -363,6 +364,8 @@ export class ThinkCodingBehavior
 			...this.buildScaffoldContext(),
 			'## User request',
 			this.state.query,
+			'',
+			...buildAudienceSection(),
 			'',
 			'## Naming',
 			'If this project does not yet have a clear name (e.g. the request is a long or vague description rather than a concise product name), call the `set_title` tool once, early, with a short human-friendly title (Title Case, under ~60 characters). Skip it if a good title already exists; do not rename on every turn.',
