@@ -25,6 +25,7 @@ import { isDev } from 'worker/utils/envs';
 import { signSpacePreviewToken } from 'worker/utils/spacePreviewToken';
 import { AppService } from 'worker/database/services/AppService';
 import { getConfigurationForModel } from '../../inferutils/core';
+import { buildClarifyBeforeBuildingSection } from '../../think/clarify-prompt';
 import type { ThinkAgentConfig } from '../../think/ThinkAgent';
 import { withDurableObjectResetRetry } from '../../think/space-workspace-ops';
 import { THINK_MODEL_CONFIG, THINK_MODEL_ID } from '../../think/model-config';
@@ -366,12 +367,7 @@ export class ThinkCodingBehavior
 			'## Naming',
 			'If this project does not yet have a clear name (e.g. the request is a long or vague description rather than a concise product name), call the `set_title` tool once, early, with a short human-friendly title (Title Case, under ~60 characters). Skip it if a good title already exists; do not rename on every turn.',
 			'',
-			'## Clarify before building',
-			'If the request is underspecified or ambiguous (e.g. a one-line idea with no details on features, scope, data, or design), do NOT start writing files yet. Instead, on this turn:',
-			'1. Briefly state the assumptions you would make to proceed.',
-			'2. Call the `ask_questions` tool with all the concise, targeted clarifying questions you need answered. Each question can include predefined options and can allow multiple selections and/or a custom free-text answer.',
-			'3. End your turn after calling `ask_questions`. Do not write/edit files or deploy until the scope is clear or the user tells you to proceed with your assumptions.',
-			'If the request is already clear and specific, skip this and go straight to building.',
+			...buildClarifyBeforeBuildingSection(),
 			'',
 			'## Deploy & verify workflow (VibeSDK-specific)',
 			'Once you are actively building (the scope is clear or the user confirmed), this app is previewed on Cloudflare Workers via SpaceDO — there is no shell. In a building turn, do NOT end after only writing files:',
