@@ -18,6 +18,7 @@ import { createThinkSkillSource } from './skills';
 import { createAskQuestionsTool } from './ask-questions-tool';
 import { createBrowserConsoleLogsTool } from './browser-logs-tool';
 import { createDeploySpaceTool } from './deploy-tool';
+import { getSandboxService } from '../../services/sandbox/factory';
 import { createCommitTool } from './commit-tool';
 import { createSetTitleTool } from './set-title-tool';
 import { selectThinkContextMessages } from './context-selector';
@@ -64,6 +65,34 @@ export interface ThinkAgentConfig {
 	 * as the default target for the `get_browser_console_logs` tool.
 	 */
 	previewUrl?: string;
+	/**
+	 * Host session token appended to the `get_browser_console_logs` target URL
+	 * so the tool loads the app authenticated (real API data).
+	 */
+	previewToken?: string;
+	/**
+	 * Paths/prefixes the agent's file tools must not modify (the seeded
+	 * template's `dontTouchFiles`). Enforced in `createSpaceWorkspaceOps`.
+	 */
+	dontTouchFiles?: string[];
+	/**
+	 * Project/worker name for the container deploy (the dispatch-namespace
+	 * subdomain, `<projectName>.booqableapps.com`). Set from the host's
+	 * generated project name.
+	 */
+	projectName?: string;
+	/**
+	 * Secrets injected into the sandbox container from the first build
+	 * ("secrets from the start"), so the deployed worker can reach Booqable
+	 * without a post-deploy secret push.
+	 */
+	envVars?: Record<string, string>;
+	/**
+	 * The current sandbox container instance id, persisted so redeploys across
+	 * hibernation reuse the same warm container (falls back to a fresh one when
+	 * the container has been recycled). Managed by `deploy_space`.
+	 */
+	sandboxInstanceId?: string;
 }
 
 const DEFAULT_SYSTEM_PROMPT =
@@ -320,8 +349,12 @@ export class ThinkAgent extends Think<Env> {
 	}
 
 	override getTools(): ToolSet {
-		const ops = createSpaceWorkspaceOps(() => this.getSpaceStub());
+		const ops = createSpaceWorkspaceOps(
+			() => this.getSpaceStub(),
+			this.getConfig<ThinkAgentConfig>()?.dontTouchFiles ?? [],
+		);
 		const previewUrl = this.getConfig<ThinkAgentConfig>()?.previewUrl;
+		const previewToken = this.getConfig<ThinkAgentConfig>()?.previewToken;
 		// Same names as Think's built-in workspace tools, so these SpaceDO-backed
 		// versions win the tool-merge. Bash is disabled via `workspaceBash`.
 		return {
@@ -334,16 +367,31 @@ export class ThinkAgent extends Think<Env> {
 			delete: createDeleteTool({ ops }),
 			// Save a restore point without deploying. The model decides when.
 			commit: createCommitTool({ getStub: () => this.getSpaceStub() }),
-			// Commit + deploy the SpaceDO branch so the preview rebuilds.
-			deploy_space: createDeploySpaceTool({ getStub: () => this.getSpaceStub() }),
+			// Commit the SpaceDO branch, then build + deploy it in a container
+			// sandbox (the SpaceDO isolate OOMs on our template — see deploy-tool).
+			deploy_space: createDeploySpaceTool({
+				getStub: () => this.getSpaceStub(),
+				// One container per app: key the sandbox by this DO's name so the
+				// same session always resolves to the same build surface.
+				getSandbox: () => getSandboxService(this.name, this.name),
+				projectName: this.getConfig<ThinkAgentConfig>()?.projectName ?? this.name,
+				envVars: this.getConfig<ThinkAgentConfig>()?.envVars,
+				getInstanceId: () => this.getConfig<ThinkAgentConfig>()?.sandboxInstanceId,
+				setInstanceId: (id) => {
+					const cfg = this.getConfig<ThinkAgentConfig>();
+					if (cfg) this.configure<ThinkAgentConfig>({ ...cfg, sandboxInstanceId: id });
+				},
+			}),
 			// Set the project's short display title (host observes the output).
 			set_title: createSetTitleTool(),
 			// Ask the user clarifying questions via a frontend popup.
 			ask_questions: createAskQuestionsTool(),
-			// Client-side debugging via a real headless browser.
+			// Client-side debugging via a real headless browser. The token is
+			// appended to whatever URL it loads so the app boots a real session.
 			get_browser_console_logs: createBrowserConsoleLogsTool({
 				env: this.env,
 				defaultUrl: previewUrl,
+				token: previewToken,
 			}),
 		} as unknown as ToolSet;
 	}

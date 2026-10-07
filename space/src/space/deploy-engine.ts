@@ -55,7 +55,7 @@ export async function handleDeployCommand(
 
 // ─── Read files from a git branch using shell's git ─────────────────────────
 
-async function readBranchFiles(
+export async function readBranchFiles(
   ctx: DeployContext,
   branch: string
 ): Promise<{ commitHash: string; files: Record<string, string> }> {

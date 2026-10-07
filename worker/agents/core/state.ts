@@ -136,6 +136,8 @@ export interface ThinkState extends BaseProjectState {
     /** Last commit SHA we successfully deployed. */
     lastDeployedCommit?: string;
     cloudflareDeploymentUrl?: string;
+    /** Host session token, appended to the preview URL for authenticated debugging. */
+    previewToken?: string;
 }
 
 export type AgentState = PhasicState | AgenticState | ThinkState;

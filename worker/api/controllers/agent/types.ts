@@ -16,6 +16,13 @@ export interface CodeGenArgs {
 
     /** Optional ephemeral credentials (BYOK / gateway override) for sdk */
     credentials?: CredentialsPayload;
+
+    /**
+     * Signed session token from the host (Booqable). Think appends it to the
+     * preview URL its `get_browser_console_logs` tool loads so the agent debugs
+     * the app authenticated (against real host API data).
+     */
+    previewToken?: string;
 }
 
 /**

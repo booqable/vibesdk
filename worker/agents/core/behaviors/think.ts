@@ -25,6 +25,8 @@ import { isDev } from 'worker/utils/envs';
 import { signSpacePreviewToken } from 'worker/utils/spacePreviewToken';
 import { AppService } from 'worker/database/services/AppService';
 import { getConfigurationForModel } from '../../inferutils/core';
+import { buildAudienceSection } from '../../think/audience-prompt';
+import { buildClarifyBeforeBuildingSection } from '../../think/clarify-prompt';
 import type { ThinkAgentConfig } from '../../think/ThinkAgent';
 import { withDurableObjectResetRetry } from '../../think/space-workspace-ops';
 import { THINK_MODEL_CONFIG, THINK_MODEL_ID } from '../../think/model-config';
@@ -157,8 +159,11 @@ export class ThinkCodingBehavior
 		..._args: unknown[]
 	): Promise<ThinkState> {
 		await super.initialize(initArgs);
-		// Think projects are template-free: SpaceDO + the agent's own file tools
-		// own scaffolding entirely. We intentionally ignore `templateInfo`.
+		// Think is normally template-free (SpaceDO + the agent's own file tools).
+		// When a template IS selected (e.g. the Booqable app starter),
+		// `super.initialize` has cached its files in `templateDetailsCache`, and
+		// `seedSpace` below writes them into the SpaceDO so Think builds ON TOP of
+		// wired scaffolding instead of an empty workspace.
 		const { query, hostname, inferenceContext, sandboxSessionId } = initArgs;
 
 		const baseName = (query || 'project').toString();
@@ -193,6 +198,7 @@ export class ThinkCodingBehavior
 			behaviorType: 'think',
 			thinkAgentName: agentName,
 			currentBranch: 'main',
+			previewToken: initArgs.previewToken,
 		});
 
 		const configureStartedAt = performance.now();
@@ -200,7 +206,7 @@ export class ThinkCodingBehavior
 		const configureDurationMs = performance.now() - configureStartedAt;
 
 		const seedStartedAt = performance.now();
-		await this.seedEmptySpace();
+		await this.seedSpace();
 		const seedDurationMs = performance.now() - seedStartedAt;
 
 		this.logger.info(
@@ -278,7 +284,26 @@ export class ThinkCodingBehavior
 				useStoredKeys: usesStoredKeys,
 			},
 			systemPrompt: this.buildSystemPrompt(modelName, aiModelConfig.provider),
-			previewUrl: await this.getBrowserPreviewURL(0).catch(() => undefined),
+			// Point the preview + get_browser_console_logs at the STABLE dispatch
+			// URL (<projectName>.booqableapps.com) the container deploy publishes
+			// to — NOT the SpaceDO in-isolate preview proxy, which our template is
+			// too heavy to bundle (128 MB DO wall). Deterministic from projectName.
+			previewUrl: this.state.projectName
+				? `https://${this.state.projectName}.${getPreviewDomain(this.env)}`
+				: undefined,
+			// Host session token. get_browser_console_logs appends it to whatever
+			// URL it loads (default or an agent-chosen route) so the app boots a
+			// real session and the agent debugs against live API data.
+			previewToken: this.state.previewToken,
+			// Protect the seeded template's wiring (e.g. the Booqable auth worker)
+			// from the agent's file tools.
+			dontTouchFiles: this.templateDetailsCache?.dontTouchFiles ?? [],
+			// Container deploy target + secrets. `deploy_space` builds + deploys
+			// in a sandbox container (the SpaceDO isolate OOMs on our template),
+			// so it needs the worker name; `envVars` is the secrets-from-the-start
+			// hook (empty until the host threads Booqable app secrets through).
+			projectName: this.state.projectName,
+			envVars: {},
 		};
 
 		try {
@@ -296,6 +321,36 @@ export class ThinkCodingBehavior
 	 * and the VibeSDK-specific deploy→verify workflow, which the generic prompt
 	 * files don't know about — the environment and custom instructions for the run.
 	 */
+	/**
+	 * When a template was seeded, tell the model the workspace is NOT empty and
+	 * it must build on the scaffold (framework, components, wiring). Without this
+	 * Think ignores the seeded files and hand-rolls a static site.
+	 */
+	private buildScaffoldContext(): string[] {
+		const tmpl = this.templateDetailsCache;
+		if (!tmpl || tmpl.name === 'think' || Object.keys(tmpl.allFiles ?? {}).length === 0) {
+			return [];
+		}
+		const dontTouch = (tmpl.dontTouchFiles ?? []).join(', ') || '(none)';
+		const importantFiles = (tmpl.importantFiles ?? []).map((f) => `- ${f}`).join('\n');
+		const usage = tmpl.description?.usage?.trim();
+
+		return [
+			'## Existing project scaffold — build ON this (IMPORTANT)',
+			'This workspace is NOT empty. It has been seeded with a complete, working starter',
+			'(framework, component library, config, and integration wiring) already committed.',
+			'You MUST build the requested feature on top of it:',
+			'- Explore FIRST: use `list` and `read` to inspect the existing files before writing anything. Do not assume the stack.',
+			'- Reuse the existing framework, components, styling tokens and libraries. Do NOT introduce a different stack.',
+			'- Do NOT create a plain static HTML/CSS/JS site, and do NOT recreate config that already exists (package.json, the build/deploy config, the entry HTML).',
+			`- NEVER modify these protected files (writes/deletes are rejected): ${dontTouch}.`,
+			'',
+			importantFiles ? '### Key files\n' + importantFiles : '',
+			usage ? '### How this starter works\n' + usage : '',
+			'',
+		].filter((s) => s !== '');
+	}
+
 	private buildSystemPrompt(modelName: string, provider: string): string {
 		return [
 			`You are powered by the model named ${modelName}. The exact model ID is ${provider}/${modelName}.`,
@@ -306,18 +361,16 @@ export class ThinkCodingBehavior
 			'',
 			`# Project: ${this.state.projectName || 'app'}`,
 			'',
+			...this.buildScaffoldContext(),
 			'## User request',
 			this.state.query,
+			'',
+			...buildAudienceSection(),
 			'',
 			'## Naming',
 			'If this project does not yet have a clear name (e.g. the request is a long or vague description rather than a concise product name), call the `set_title` tool once, early, with a short human-friendly title (Title Case, under ~60 characters). Skip it if a good title already exists; do not rename on every turn.',
 			'',
-			'## Clarify before building',
-			'If the request is underspecified or ambiguous (e.g. a one-line idea with no details on features, scope, data, or design), do NOT start writing files yet. Instead, on this turn:',
-			'1. Briefly state the assumptions you would make to proceed.',
-			'2. Call the `ask_questions` tool with all the concise, targeted clarifying questions you need answered. Each question can include predefined options and can allow multiple selections and/or a custom free-text answer.',
-			'3. End your turn after calling `ask_questions`. Do not write/edit files or deploy until the scope is clear or the user tells you to proceed with your assumptions.',
-			'If the request is already clear and specific, skip this and go straight to building.',
+			...buildClarifyBeforeBuildingSection(),
 			'',
 			'## Deploy & verify workflow (VibeSDK-specific)',
 			'Once you are actively building (the scope is clear or the user confirmed), this app is previewed on Cloudflare Workers via SpaceDO — there is no shell. In a building turn, do NOT end after only writing files:',
@@ -332,20 +385,38 @@ export class ThinkCodingBehavior
 	}
 
 	/**
-	 * Bootstrap an empty SpaceDO: write a marker file and commit so the DO is
-	 * instantiated with a `main` branch and a valid HEAD.
+	 * Bootstrap the SpaceDO so it has a `main` branch and a valid HEAD. When a
+	 * template was selected at create time, `templateDetailsCache.allFiles` holds
+	 * its files (cached by `super.initialize`) — write them into the space and
+	 * commit so Think starts from that scaffolding. Otherwise write a marker
+	 * (the classic template-free empty space).
 	 */
-	private async seedEmptySpace(): Promise<void> {
-		const marker = JSON.stringify(
-			{ agentId: this.getAgentId(), createdAt: new Date().toISOString(), seededBy: 'vibesdk-think' },
-			null,
-			2,
-		);
+	private async seedSpace(): Promise<void> {
+		const templateFiles = this.templateDetailsCache?.allFiles;
+		const templateName = this.templateDetailsCache?.name;
+		const paths = templateFiles ? Object.keys(templateFiles) : [];
+
 		try {
-			await this.callSpace((space) => space.writeFile('.think/space.json', marker));
-			await this.callSpace((space) => space.gitCommitLocal('chore: initialize think space'));
+			if (paths.length > 0) {
+				// One writeFile RPC per file; the SpaceDO has no batch write.
+				for (const path of paths) {
+					await this.callSpace((space) => space.writeFile(path, templateFiles![path]));
+				}
+				await this.callSpace((space) =>
+					space.gitCommitLocal(`chore: seed think space from template ${templateName ?? 'template'}`),
+				);
+				this.logger.info(`Seeded think space from template "${templateName}" (${paths.length} files)`);
+			} else {
+				const marker = JSON.stringify(
+					{ agentId: this.getAgentId(), createdAt: new Date().toISOString(), seededBy: 'vibesdk-think' },
+					null,
+					2,
+				);
+				await this.callSpace((space) => space.writeFile('.think/space.json', marker));
+				await this.callSpace((space) => space.gitCommitLocal('chore: initialize think space'));
+			}
 		} catch (e) {
-			this.logger.warn('SpaceDO empty-seed failed (continuing)', e);
+			this.logger.warn('SpaceDO seed failed (continuing)', e);
 		}
 	}
 
@@ -353,12 +424,17 @@ export class ThinkCodingBehavior
 	// Generation orchestration
 
 	/**
-	 * The `preview` WS action / preview controller route here. Think has no
-	 * sandbox — previews run on Workers via SpaceDO — so deploy the current
-	 * SpaceDO branch and return its preview URL.
+	 * Host-driven preview hook. The base `generateAllFiles` lifecycle calls this
+	 * around `build()`, and the `preview` WS action routes here too. Think's
+	 * deploys are entirely MODEL-driven via the `deploy_space` tool (container
+	 * build → dispatch namespace), so this must NOT bundle: the old in-isolate
+	 * `deployCurrentBranch()` (SpaceDO `createApp`) OOMs on our dep-rich template
+	 * ("Durable Object's isolate exceeded its memory limit"). Just surface the
+	 * URL the model's last `deploy_space` published; return null until then so
+	 * the FE shows "preview will appear once the first version is generated".
 	 */
 	async deployToSandbox(): Promise<PreviewType | null> {
-		const url = await this.deployCurrentBranch();
+		const url = this.state.cloudflareDeploymentUrl;
 		return url ? { previewURL: url } : null;
 	}
 
@@ -743,11 +819,17 @@ export class ThinkCodingBehavior
 	}
 
 	/**
-	 * The model deployed the SpaceDO itself via the `deploy_space` tool. Reflect
-	 * that into VibeSDK: parse the tool's JSON result, and on success surface the
-	 * preview to the FE (the same `DEPLOYMENT_COMPLETED { previewURL }` event
-	 * `deployCurrentBranch` emits). On a reported build error, emit
-	 * `DEPLOYMENT_FAILED`.
+	 * `deploy_space` built + deployed the branch in a container sandbox to the
+	 * dispatch namespace (the SpaceDO isolate is too small to bundle our
+	 * template). Reflect that into VibeSDK: parse the tool's JSON result, then
+	 *  - register the deployment on the app record (`updateDeploymentId`) and
+	 *    make the app public — the dispatch router (worker/index.ts) consults the
+	 *    DB record + visibility on EVERY request and 404s ("not currently
+	 *    available") until both are set, which is why a raw container deploy was
+	 *    invisible;
+	 *  - surface the STABLE `<projectName>.booqableapps.com` preview URL the tool
+	 *    returns (NOT `getBrowserPreviewURL()`, the dead SpaceDO proxy).
+	 * On a reported build error, emit `DEPLOYMENT_FAILED`.
 	 */
 	private async handleDeploySpaceOutput(output: unknown): Promise<void> {
 		let parsed: Record<string, unknown> | undefined;
@@ -762,15 +844,32 @@ export class ThinkCodingBehavior
 			return;
 		}
 
-		const commitHash = parsed && typeof parsed.commit_hash === 'string' ? parsed.commit_hash : undefined;
-		if (commitHash) {
-			this.setState({ ...this.state, lastDeployedCommit: commitHash });
+		const previewURL = parsed && typeof parsed.preview_url === 'string' ? parsed.preview_url : undefined;
+		const deploymentId = parsed && typeof parsed.deployment_id === 'string' ? parsed.deployment_id : undefined;
+
+		if (deploymentId) {
+			try {
+				const apps = new AppService(this.env);
+				await apps.updateDeploymentId(this.getAgentId(), deploymentId);
+				// Building previews must be publicly servable so the FE iframe and
+				// the headless `get_browser_console_logs` browser can load them.
+				await apps.updateAppVisibility(this.getAgentId(), this.state.metadata.userId, 'public');
+			} catch (e) {
+				this.logger.warn('Failed to register think dispatch deployment', e);
+			}
+			this.setState({ ...this.state, cloudflareDeploymentUrl: previewURL });
 		}
-		try {
-			const url = await this.getBrowserPreviewURL();
-			this.broadcast(WebSocketMessageResponses.DEPLOYMENT_COMPLETED, { previewURL: url });
-		} catch (e) {
-			this.logger.warn('Failed to surface preview after deploy_space', e);
+
+		if (previewURL) {
+			this.broadcast(WebSocketMessageResponses.CLOUDFLARE_DEPLOYMENT_COMPLETED, {
+				message: 'Successfully deployed to Cloudflare Workers',
+				instanceId: this.getAgentId(),
+				deploymentUrl: previewURL,
+				workersUrl: previewURL,
+			});
+			this.broadcast(WebSocketMessageResponses.DEPLOYMENT_COMPLETED, { previewURL });
+		} else {
+			this.logger.warn('deploy_space returned no preview_url', { parsed });
 		}
 	}
 
@@ -858,48 +957,6 @@ export class ThinkCodingBehavior
 			updatedKeys: ['title'],
 			blueprint: updatedBlueprint,
 		});
-	}
-
-	private async deployCurrentBranch(): Promise<string | null> {
-		try {
-			const branch = this.state.currentBranch || 'main';
-			this.broadcast(WebSocketMessageResponses.DEPLOYMENT_STARTED, {});
-
-			// SpaceDO.deploy reads files from the committed git branch, so commit
-			// the working-tree changes the ThinkAgent's tools just made first.
-			try {
-				await this.callSpace((space) => space.gitCommit('chore: think turn changes'));
-			} catch (e) {
-				this.logger.debug('gitCommit before deploy (no-op or failed)', e);
-			}
-
-			const result = await this.callSpace((space) => space.deploy(branch));
-
-			// SpaceDO.deploy reports build/config failures in the payload rather
-			// than throwing (and still fills in preview_url). Surface those as a
-			// real deployment failure so the FE/agent sees the build error (e.g.
-			// a syntax error in the generated code) instead of a broken preview.
-			if (result?.error) {
-				const message = result.details ? `${result.error}: ${result.details}` : result.error;
-				this.logger.warn('SpaceDO.deploy reported a build failure', { branch, error: message });
-				this.broadcast(WebSocketMessageResponses.DEPLOYMENT_FAILED, { error: message });
-				return null;
-			}
-
-			if (result?.commit_hash) {
-				this.setState({ ...this.state, lastDeployedCommit: result.commit_hash });
-			}
-
-			const url = await this.getBrowserPreviewURL();
-			this.broadcast(WebSocketMessageResponses.DEPLOYMENT_COMPLETED, { previewURL: url });
-			return url;
-		} catch (e) {
-			this.logger.warn('SpaceDO.deploy failed', e);
-			this.broadcast(WebSocketMessageResponses.DEPLOYMENT_FAILED, {
-				error: e instanceof Error ? e.message : String(e),
-			});
-			return null;
-		}
 	}
 
 	async deployToCloudflare(

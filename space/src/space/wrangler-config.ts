@@ -48,8 +48,11 @@ export function parseWranglerConfig(files: Record<string, string>): ParsedWrangl
 }
 
 function parseJsonConfig(content: string): ParsedWranglerConfig {
-  // Strip single-line comments for jsonc support
-  const stripped = content.replace(/^\s*\/\/.*$/gm, "")
+  // Strip comments for jsonc support: block comments (/* … */, including the
+  // /** … */ header vite-reference ships) first, then single-line comments.
+  const stripped = content
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "")
   const raw = JSON.parse(stripped)
 
   const cfg: ParsedWranglerConfig = {}

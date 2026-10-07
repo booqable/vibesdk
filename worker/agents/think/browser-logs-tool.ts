@@ -23,8 +23,8 @@ const DESCRIPTION = [
 	"OUTPUT is JSON: { url, captured_at, logs:[{level,text,location}], page_errors:[{message,stack}], request_failures:[{url,failure,status}], truncated, totals, warning? }. If 'warning' is set in dev, the browser sidecar wasn't reachable — instruct the user to run 'npm run dev:browser' and retry. Each category is independently capped at max_lines (default 100, -1 = no limit).",
 ].join('\n');
 
-export function createBrowserConsoleLogsTool(opts: { env: Env; defaultUrl?: string }): Tool {
-	const { env, defaultUrl } = opts;
+export function createBrowserConsoleLogsTool(opts: { env: Env; defaultUrl?: string; token?: string }): Tool {
+	const { env, defaultUrl, token } = opts;
 	const logger = createLogger('ThinkBrowserLogs');
 	return tool({
 		description: DESCRIPTION,
@@ -54,12 +54,19 @@ export function createBrowserConsoleLogsTool(opts: { env: Env; defaultUrl?: stri
 			max_lines?: number;
 			interact_script?: string;
 		}) => {
-			const targetUrl = args.url ?? defaultUrl;
+			let targetUrl = args.url ?? defaultUrl;
 			if (!targetUrl) {
 				return JSON.stringify({
 					error:
 						'No preview URL available yet. Deploy the app first, or pass an explicit `url`.',
 				});
+			}
+			// Load the preview authenticated: the app reads a `token` query param
+			// to bootstrap a real session. Append it whenever the host supplied a
+			// token and the URL (default OR an agent-chosen route) lacks one, so
+			// the agent never debugs a logged-out shell.
+			if (token && !/[?&]token=/.test(targetUrl)) {
+				targetUrl += `${targetUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
 			}
 
 			const client = getBrowserCaptureClient(env, logger);
